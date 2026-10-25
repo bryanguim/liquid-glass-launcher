@@ -37,7 +37,13 @@ import com.bruce.liquidglass.home.HomeScreen
 import com.bruce.liquidglass.home.LauncherActions
 import com.bruce.liquidglass.home.LocalActions
 import com.bruce.liquidglass.onboarding.Onboarding
+import com.bruce.liquidglass.home.LocalSettings
+import com.bruce.liquidglass.ui.GlassLook
+import com.bruce.liquidglass.ui.LocalBackdrop
+import com.bruce.liquidglass.ui.LocalGlassLook
 import com.bruce.liquidglass.ui.LocalScreenSize
+import com.bruce.liquidglass.ui.WallClock
+import com.bruce.liquidglass.ui.rememberBackdrop
 import com.bruce.liquidglass.ui.LocalWallTime
 import com.bruce.liquidglass.ui.LocalWallpaper
 import com.bruce.liquidglass.ui.WallpaperLayer
@@ -64,7 +70,28 @@ class MainActivity : ComponentActivity(), LauncherActions {
             if (!isDefaultHome()) openHomeSettings()
         }
 
-        setContent { Root(vm, this) }
+        applyRefreshRate(vm.settings.highRefresh)
+        setContent {
+            val high = vm.settings.highRefresh
+            androidx.compose.runtime.LaunchedEffect(high) { applyRefreshRate(high) }
+            Root(vm, this)
+        }
+    }
+
+    /** Ask for the panel's fastest mode (120 Hz on Honor) — MagicOS often keeps apps at 60 Hz otherwise. */
+    private fun applyRefreshRate(high: Boolean) {
+        runCatching {
+            @Suppress("DEPRECATION")
+            val disp = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) this.display else windowManager.defaultDisplay) ?: return
+            val current = disp.mode
+            val best = disp.supportedModes
+                .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+            val attrs = window.attributes
+            attrs.preferredDisplayModeId = if (high && best != null) best.modeId else 0
+            if (high && best != null) attrs.preferredRefreshRate = best.refreshRate
+            window.attributes = attrs
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -153,21 +180,24 @@ private fun Root(vm: LauncherViewModel, actions: LauncherActions) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val screen = Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
         val time = remember { mutableFloatStateOf(0f) }
-        LaunchedEffect(vm.animateWallpaper) {
-            if (!vm.animateWallpaper) return@LaunchedEffect
-            var last = withFrameNanos { it }
+        val s = vm.settings
+        LaunchedEffect(s.animateWallpaper, s.wallpaperSpeed) {
+            if (!s.animateWallpaper) { time.floatValue = WallClock.STATIC_T; return@LaunchedEffect }
             while (true) {
-                withFrameNanos { now ->
-                    time.floatValue += (now - last) / 1_000_000_000f * 0.5f
-                    last = now
-                }
+                withFrameNanos { now -> time.floatValue = WallClock.at(now, s.wallpaperSpeed) }
             }
         }
+        val spec = remember(s.wallpaper, vm.photo, s.wallpaperDim) { WallpaperSpec(s.wallpaper, vm.photo, s.wallpaperDim) }
+        val backdrop = rememberBackdrop(spec, s.animateWallpaper, s.wallpaperSpeed, screen)
+        val look = remember(s.glassTint, s.glassRim) { GlassLook(s.glassTint, s.glassRim) }
         CompositionLocalProvider(
-            LocalWallpaper provides WallpaperSpec(vm.wallpaper, vm.photo),
+            LocalWallpaper provides spec,
             LocalWallTime provides time,
             LocalScreenSize provides screen,
             LocalActions provides actions,
+            LocalBackdrop provides backdrop,
+            LocalGlassLook provides look,
+            LocalSettings provides s,
         ) {
             WallpaperLayer(Modifier.fillMaxSize())
             if (vm.loaded) HomeScreen(vm)

@@ -8,7 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
@@ -28,19 +28,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -50,38 +50,50 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bruce.liquidglass.data.AppInfo
+import com.bruce.liquidglass.data.IconShape
 import com.bruce.liquidglass.data.IconStyle
+import com.bruce.liquidglass.data.LauncherSettings
+import com.bruce.liquidglass.ui.CoordsRef
 import com.bruce.liquidglass.ui.Glass
+import com.bruce.liquidglass.ui.LocalBackdrop
+import com.bruce.liquidglass.ui.LocalScreenSize
 import com.bruce.liquidglass.ui.Motion
 import com.bruce.liquidglass.ui.Squircle
+import com.bruce.liquidglass.ui.drawBackdrop
 import com.bruce.liquidglass.ui.tick
 
-private val grayscale = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+val LocalSettings = staticCompositionLocalOf { LauncherSettings() }
 
-/** Just the squircle icon image, in the chosen style. */
+fun IconShape.toShape(): Shape = when (this) {
+    IconShape.SQUIRCLE -> Squircle
+    IconShape.ROUNDED -> RoundedCornerShape(24)
+    IconShape.CIRCLE -> CircleShape
+}
+
+fun CoordsRef.windowBounds(): Rect {
+    val c = coords
+    return if (c != null && c.isAttached) c.boundsInWindow() else Rect.Zero
+}
+
+/** The baked icon bitmap. "Clear" icons also show the blurred wallpaper through their glass. */
 @Composable
-fun IconImage(app: AppInfo, size: Dp, style: IconStyle, modifier: Modifier = Modifier) {
-    if (style == IconStyle.CLEAR) {
-        Glass(modifier.size(size), shape = Squircle, blur = 18.dp) {
-            Image(
-                bitmap = app.icon,
-                contentDescription = app.label,
-                contentScale = ContentScale.Crop,
-                colorFilter = grayscale,
-                alpha = 0.78f,
-                modifier = Modifier.size(size).clip(Squircle),
-            )
-        }
-    } else {
+fun IconImage(app: AppInfo, size: Dp, modifier: Modifier = Modifier) {
+    val s = LocalSettings.current
+    if (s.iconStyle == IconStyle.CLEAR) {
+        val ref = remember { CoordsRef() }
+        val backdrop = LocalBackdrop.current
+        val screen = LocalScreenSize.current
         Image(
             bitmap = app.icon,
             contentDescription = app.label,
-            contentScale = ContentScale.Crop,
             modifier = modifier
                 .size(size)
-                .clip(Squircle)
-                .border(0.6.dp, Color.White.copy(alpha = 0.18f), Squircle),
+                .onPlaced { ref.coords = it }
+                .clip(s.iconShape.toShape())
+                .drawBehind { drawBackdrop(ref, backdrop, screen) },
         )
+    } else {
+        Image(bitmap = app.icon, contentDescription = app.label, modifier = modifier.size(size))
     }
 }
 
@@ -98,15 +110,11 @@ private fun jiggleRotation(seed: Int): Float {
     return r
 }
 
-/**
- * A home-screen icon with press-shrink, long-press, launch bounds, jiggle (edit mode)
- * and the "−" badge.
- */
+/** A home-screen icon with press-shrink, long-press, launch bounds, jiggle and the "−" badge. */
 @Composable
 fun AppIcon(
     app: AppInfo,
     iconSize: Dp,
-    style: IconStyle,
     showLabel: Boolean,
     editing: Boolean,
     selected: Boolean,
@@ -117,11 +125,12 @@ fun AppIcon(
     modifier: Modifier = Modifier,
 ) {
     val view = LocalView.current
+    val settings = LocalSettings.current
     val tapAction by rememberUpdatedState(onTap)
     val longAction by rememberUpdatedState(onLongPress)
     val removeAction by rememberUpdatedState(onRemove)
+    val ref = remember { CoordsRef() }
     var pressed by remember { mutableStateOf(false) }
-    var bounds by remember { mutableStateOf(Rect.Zero) }
     val scale by animateFloatAsState(
         targetValue = when {
             selected -> 1.14f
@@ -131,16 +140,15 @@ fun AppIcon(
         animationSpec = Motion.snappy(),
         label = "iconScale",
     )
-    val rotation = if (editing && !selected) jiggleRotation(seed) else 0f
+    val rotation = if (editing && !selected && !settings.reducedMotion) jiggleRotation(seed) else 0f
 
-    Column(modifier.width(iconSize + 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.width(iconSize + 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
             Box(
                 Modifier
-                    .onGloballyPositioned { bounds = it.boundsInWindow() }
+                    .onPlaced { ref.coords = it }
                     .graphicsLayer {
                         scaleX = scale; scaleY = scale; rotationZ = rotation
-                        alpha = if (pressed && !editing) 0.85f else 1f
                     }
                     .pointerInput(app.key, editing) {
                         detectTapGestures(
@@ -149,16 +157,16 @@ fun AppIcon(
                                 tryAwaitRelease()
                                 pressed = false
                             },
-                            onTap = { tapAction(bounds) },
+                            onTap = { tapAction(ref.windowBounds()) },
                             onLongPress = {
                                 pressed = false
                                 view.tick()
-                                longAction(bounds)
+                                longAction(ref.windowBounds())
                             },
                         )
                     }
             ) {
-                IconImage(app, iconSize, style)
+                IconImage(app, iconSize)
             }
             val badge by animateFloatAsState(
                 if (editing && onRemove != null) 1f else 0f, Motion.bouncy(), label = "badge"
@@ -184,7 +192,7 @@ fun AppIcon(
             Spacer(Modifier.height(6.dp))
             Text(
                 app.label,
-                style = LabelStyle,
+                style = LabelStyle.copy(fontSize = settings.labelSize.sp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,

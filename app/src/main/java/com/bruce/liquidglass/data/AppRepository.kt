@@ -25,6 +25,7 @@ data class AppInfo(
     val category: String,
     val installTime: Long,
     val isSystem: Boolean,
+    val drawable: Drawable,
     val icon: ImageBitmap,
 )
 
@@ -57,20 +58,23 @@ class AppRepository(private val context: Context) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val pm = context.packageManager
 
-    fun loadApps(iconSizePx: Int): List<AppInfo> {
+    fun loadApps(cfg: IconConfig, iconSizePx: Int): List<AppInfo> {
         val list = launcherApps.getActivityList(null, Process.myUserHandle())
         return list
             .filter { it.componentName.packageName != context.packageName }
-            .mapNotNull { info -> runCatching { toAppInfo(info, iconSizePx) }.getOrNull() }
+            .mapNotNull { info -> runCatching { toAppInfo(info, cfg, iconSizePx) }.getOrNull() }
             .distinctBy { it.key }
             .sortedBy { it.label.lowercase() }
     }
 
-    private fun toAppInfo(info: LauncherActivityInfo, size: Int): AppInfo {
+    fun rebake(apps: List<AppInfo>, cfg: IconConfig, px: Int): List<AppInfo> =
+        apps.map { a -> runCatching { a.copy(icon = IconFactory.bake(a.drawable, cfg, px).asImageBitmap()) }.getOrDefault(a) }
+
+    private fun toAppInfo(info: LauncherActivityInfo, cfg: IconConfig, size: Int): AppInfo {
         val label = info.label?.toString()?.ifBlank { null } ?: info.componentName.packageName
         val ai = info.applicationInfo
         val installTime = runCatching { pm.getPackageInfo(ai.packageName, 0).firstInstallTime }.getOrDefault(0L)
-        val drawable = info.getIcon(0) ?: pm.defaultActivityIcon
+        val drawable = (info.getIcon(0) ?: pm.defaultActivityIcon).mutate()
         return AppInfo(
             key = info.componentName.flattenToShortString(),
             label = label,
@@ -80,26 +84,9 @@ class AppRepository(private val context: Context) {
             installTime = installTime,
             isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
                 (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0,
-            icon = renderIcon(drawable, size).asImageBitmap(),
+            drawable = drawable,
+            icon = IconFactory.bake(drawable, cfg, size).asImageBitmap(),
         )
-    }
-
-    /** Renders an icon full-bleed in a square, so the UI can clip it to an iOS-like squircle. */
-    private fun renderIcon(d: Drawable, size: Int): Bitmap {
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
-        if (d is AdaptiveIconDrawable) {
-            // The adaptive layers are 108dp with a 72dp safe zone: expand them so the safe zone fills the square.
-            val inset = size / 4
-            d.background?.let { it.setBounds(-inset, -inset, size + inset, size + inset); it.draw(c) }
-            d.foreground?.let { it.setBounds(-inset, -inset, size + inset, size + inset); it.draw(c) }
-        } else {
-            c.drawColor(android.graphics.Color.WHITE)
-            val pad = (size * 0.16f).toInt()
-            d.setBounds(pad, pad, size - pad, size - pad)
-            d.draw(c)
-        }
-        return bmp
     }
 
     private fun categorize(label: String, ai: ApplicationInfo): String {

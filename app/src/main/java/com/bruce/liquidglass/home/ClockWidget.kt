@@ -42,6 +42,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bruce.liquidglass.data.ClockStyle
+import com.bruce.liquidglass.data.LauncherSettings
 import com.bruce.liquidglass.ui.Glass
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -61,7 +63,7 @@ private fun readBattery(ctx: Context): Battery {
 }
 
 @Composable
-fun ClockWidget(modifier: Modifier = Modifier) {
+fun ClockWidget(settings: LauncherSettings, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var battery by remember { mutableStateOf(readBattery(ctx)) }
@@ -98,12 +100,16 @@ fun ClockWidget(modifier: Modifier = Modifier) {
                     time,
                     color = Color.White,
                     fontSize = 64.sp,
-                    fontWeight = FontWeight.Light,
+                    fontWeight = when (settings.clockStyle) {
+                        ClockStyle.THIN -> FontWeight.Light
+                        ClockStyle.REGULAR -> FontWeight.Normal
+                        ClockStyle.BOLD -> FontWeight.Bold
+                    },
                     letterSpacing = (-1.5).sp,
                     lineHeight = 66.sp,
                 )
             }
-            BatteryRing(battery)
+            if (settings.showBattery) BatteryRing(battery)
         }
     }
 }

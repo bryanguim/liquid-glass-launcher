@@ -46,7 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -65,9 +65,9 @@ import kotlin.math.abs
 data class LibraryGroup(val title: String, val apps: List<AppInfo>, val allLaunchable: Boolean)
 
 fun libraryGroups(vm: LauncherViewModel): List<LibraryGroup> {
-    val apps = vm.apps
+    val apps = vm.visibleApps
     val out = mutableListOf<LibraryGroup>()
-    val suggestions = vm.recents.mapNotNull { vm.appsByKey[it] }.take(4)
+    val suggestions = vm.recents.filter { it !in vm.settings.hidden }.mapNotNull { vm.appsByKey[it] }.take(4)
         .ifEmpty { apps.filter { !it.isSystem }.take(4) }
     if (suggestions.isNotEmpty()) out += LibraryGroup("Suggestions", suggestions, true)
     val recent = apps.sortedByDescending { it.installTime }.take(4)
@@ -83,7 +83,7 @@ fun libraryGroups(vm: LauncherViewModel): List<LibraryGroup> {
 @Composable
 fun AppLibrary(vm: LauncherViewModel) {
     val view = LocalView.current
-    val groups = remember(vm.apps, vm.recents) { libraryGroups(vm) }
+    val groups = remember(vm.apps, vm.recents, vm.settings.hidden) { libraryGroups(vm) }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
@@ -146,21 +146,21 @@ private fun LibraryTile(vm: LauncherViewModel, g: LibraryGroup) {
 @Composable
 private fun LibraryIcon(vm: LauncherViewModel, app: AppInfo, size: Dp) {
     val view = LocalView.current
-    var bounds by remember { mutableStateOf(Rect.Zero) }
+    val ref = remember { com.bruce.liquidglass.ui.CoordsRef() }
     var pressed by remember { mutableStateOf(false) }
     val s by animateFloatAsState(if (pressed) 0.86f else 1f, Motion.snappy(), label = "lib")
     IconImage(
-        app, size, vm.iconStyle,
+        app, size,
         Modifier
-            .onGloballyPositioned { bounds = it.boundsInWindow() }
+            .onPlaced { ref.coords = it }
             .graphicsLayer { scaleX = s; scaleY = s }
             .pointerInput(app.key) {
                 detectTapGestures(
                     onPress = { pressed = true; tryAwaitRelease(); pressed = false },
-                    onTap = { vm.launch(app, bounds, view) },
+                    onTap = { vm.launch(app, ref.windowBounds(), view) },
                     onLongPress = {
                         view.tick()
-                        vm.menu = MenuTarget(app, bounds, inDock = app.key in vm.dock, onHome = vm.isOnHome(app.key))
+                        vm.menu = MenuTarget(app, ref.windowBounds(), inDock = app.key in vm.dock, onHome = vm.isOnHome(app.key))
                     },
                 )
             },
@@ -178,10 +178,7 @@ private fun MiniCluster(apps: List<AppInfo>, size: Dp, onClick: () -> Unit) {
             for (c in 0 until 2) {
                 val app = apps.getOrNull(r * 2 + c)
                 Box(Modifier.size(mini)) {
-                    if (app != null) androidx.compose.foundation.Image(
-                        bitmap = app.icon, contentDescription = null,
-                        modifier = Modifier.fillMaxSize().clip(com.bruce.liquidglass.ui.Squircle),
-                    )
+                    if (app != null) IconImage(app, mini)
                 }
             }
         }
@@ -243,7 +240,7 @@ fun CategoryOverlay(vm: LauncherViewModel) {
                         items(apps, key = { it.key }) { app ->
                             Box(Modifier.height(96.dp), contentAlignment = Alignment.TopCenter) {
                                 AppIcon(
-                                    app = app, iconSize = 56.dp, style = vm.iconStyle, showLabel = true,
+                                    app = app, iconSize = 56.dp, showLabel = vm.settings.showLabels,
                                     editing = false, selected = false, seed = abs(app.key.hashCode()),
                                     onTap = { b -> vm.launch(app, b, view); vm.openCategory = null },
                                     onLongPress = { b ->

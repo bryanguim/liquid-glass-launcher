@@ -56,7 +56,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -117,7 +117,7 @@ private fun SearchContent(vm: LauncherViewModel, mode: SearchMode, slide: Modifi
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 
-    val results = remember(query, vm.apps) { rank(vm.apps, query) }
+    val results = remember(query, vm.apps, vm.settings.hidden) { rank(vm.visibleApps, query) }
     fun close() { keyboard?.hide(); vm.search = null }
 
     Box(
@@ -155,11 +155,11 @@ private fun SearchContent(vm: LauncherViewModel, mode: SearchMode, slide: Modifi
                     if (query.isBlank()) {
                         if (mode == SearchMode.SPOTLIGHT) {
                             val sugg = vm.recents.mapNotNull { vm.appsByKey[it] }.take(8)
-                                .ifEmpty { vm.apps.filter { !it.isSystem }.take(8) }
+                                .ifEmpty { vm.visibleApps.filter { !it.isSystem }.take(8) }
                             item { SectionTitle("Suggestions") }
                             item { IconGridCard(vm, sugg) { vm.search = null } }
                         } else {
-                            val grouped = vm.apps.groupBy { it.label.firstOrNull()?.uppercaseChar()?.takeIf { c -> c.isLetter() } ?: '#' }
+                            val grouped = vm.visibleApps.groupBy { it.label.firstOrNull()?.uppercaseChar()?.takeIf { c -> c.isLetter() } ?: '#' }
                                 .toSortedMap()
                             grouped.forEach { (letter, list) ->
                                 item(key = "h$letter") { SectionTitle(letter.toString()) }
@@ -253,7 +253,7 @@ private fun IconGridCard(vm: LauncherViewModel, apps: List<AppInfo>, afterLaunch
                         Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
                             val app = row.getOrNull(c)
                             if (app != null) AppIcon(
-                                app = app, iconSize = 56.dp, style = vm.iconStyle, showLabel = true,
+                                app = app, iconSize = 56.dp, showLabel = true,
                                 editing = false, selected = false, seed = abs(app.key.hashCode()),
                                 onTap = { b -> vm.launch(app, b, view); afterLaunch() },
                                 onLongPress = { b ->
@@ -275,25 +275,25 @@ private fun AppListCard(vm: LauncherViewModel, apps: List<AppInfo>, afterLaunch:
     Glass(Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures { } }, shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(vertical = 4.dp)) {
             apps.forEach { app ->
-                var bounds by remember { mutableStateOf(Rect.Zero) }
+                val ref = remember { com.bruce.liquidglass.ui.CoordsRef() }
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .onGloballyPositioned { bounds = it.boundsInWindow() }
+                        .onPlaced { ref.coords = it }
                         .pointerInput(app.key) {
                             detectTapGestures(
-                                onTap = { vm.launch(app, bounds, view); afterLaunch() },
+                                onTap = { vm.launch(app, ref.windowBounds(), view); afterLaunch() },
                                 onLongPress = {
                                     view.tick()
-                                    vm.menu = com.bruce.liquidglass.MenuTarget(app, bounds, app.key in vm.dock, vm.isOnHome(app.key))
+                                    vm.menu = com.bruce.liquidglass.MenuTarget(app, ref.windowBounds(), app.key in vm.dock, vm.isOnHome(app.key))
                                 },
                             )
                         }
                         .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconImage(app, 38.dp, vm.iconStyle)
+                    IconImage(app, 38.dp)
                     Spacer(Modifier.width(14.dp))
                     Text(app.label, color = Color.White, fontSize = 16.sp, maxLines = 1)
                 }

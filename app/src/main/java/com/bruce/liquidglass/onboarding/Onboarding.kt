@@ -74,6 +74,9 @@ import com.bruce.liquidglass.home.IconImage
 import com.bruce.liquidglass.home.LocalActions
 import com.bruce.liquidglass.ui.Glass
 import com.bruce.liquidglass.ui.LocalWallpaper
+import com.bruce.liquidglass.ui.LocalBackdrop
+import com.bruce.liquidglass.ui.LocalScreenSize
+import com.bruce.liquidglass.ui.rememberBackdrop
 import com.bruce.liquidglass.ui.Motion
 import com.bruce.liquidglass.ui.WallpaperLayer
 import com.bruce.liquidglass.ui.WallpaperSpec
@@ -87,7 +90,9 @@ private val greetings = listOf("Bonjour", "Hello", "Hola", "Ciao", "Hallo", "OlÃ
 @Composable
 fun Onboarding(vm: LauncherViewModel) {
     // The guide always uses the colourful aurora backdrop, like an Apple setup screen.
-    CompositionLocalProvider(LocalWallpaper provides WallpaperSpec(WallpaperKind.AURORA, null)) {
+    val spec = remember { WallpaperSpec(WallpaperKind.AURORA, null) }
+    val backdrop = rememberBackdrop(spec, animate = true, speed = 1f, screen = LocalScreenSize.current)
+    CompositionLocalProvider(LocalWallpaper provides spec, LocalBackdrop provides backdrop) {
         var step by remember { mutableIntStateOf(0) }
         val view = LocalView.current
         BackHandler(enabled = step > 0) { step-- }
@@ -406,7 +411,7 @@ private fun ShowcaseCard(vm: LauncherViewModel, app: ShowcaseApp, modifier: Modi
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.weight(0.6f))
-            if (installed != null) IconImage(installed, 104.dp, vm.iconStyle)
+            if (installed != null) IconImage(installed, 104.dp)
             else ShowcaseArtwork(app.art, 104.dp)
             Spacer(Modifier.height(20.dp))
             Text(app.name, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)

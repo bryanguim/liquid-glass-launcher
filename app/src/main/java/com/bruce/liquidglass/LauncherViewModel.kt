@@ -18,9 +18,11 @@ import androidx.lifecycle.viewModelScope
 import com.bruce.liquidglass.data.AppInfo
 import com.bruce.liquidglass.data.AppRepository
 import com.bruce.liquidglass.data.Categories
-import com.bruce.liquidglass.data.IconStyle
 import com.bruce.liquidglass.data.LauncherPrefs
+import com.bruce.liquidglass.data.LauncherSettings
 import com.bruce.liquidglass.data.WallpaperKind
+import com.bruce.liquidglass.data.iconConfig
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
@@ -28,9 +30,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-const val PAGE0_CAPACITY = 16 // first page holds the 4x2 clock widget
-const val PAGE_CAPACITY = 24  // 4 columns x 6 rows
-const val DOCK_CAPACITY = 4
 
 enum class SearchMode { SPOTLIGHT, LIBRARY }
 
@@ -57,11 +56,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // ---- settings ----
     var onboarded by mutableStateOf(prefs.onboarded); private set
-    var wallpaper by mutableStateOf(prefs.wallpaper); private set
-    var iconStyle by mutableStateOf(prefs.iconStyle); private set
-    var animateWallpaper by mutableStateOf(prefs.animateWallpaper); private set
-    var showLabels by mutableStateOf(prefs.showLabels); private set
+    var settings by mutableStateOf(prefs.settings); private set
     var photo by mutableStateOf<ImageBitmap?>(null); private set
+    var rebaking by mutableStateOf(false); private set
+    private var bakeJob: Job? = null
+
+    /** Apps that are not hidden — what the library and search show. */
+    val visibleApps: List<AppInfo> get() = apps.filter { it.key !in settings.hidden }
+
+    val dockCapacity: Int get() = settings.dockSize
+    fun capacity(page: Int): Int {
+        val perPage = settings.columns * settings.rows
+        return if (page == 0 && settings.showWidget) settings.columns * (settings.rows - 2) else perPage
+    }
 
     // ---- transient UI state ----
     var editing by mutableStateOf(false)
@@ -77,6 +84,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val returnedHome = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     init {
+        com.bruce.liquidglass.ui.Motion.reduced = settings.reducedMotion
+        com.bruce.liquidglass.ui.Haptics.enabled = settings.haptics
         loadPhoto()
         refresh()
         callback = repo.registerCallback { refresh() }
@@ -88,8 +97,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun refresh() {
         viewModelScope.launch {
-            val list = withContext(Dispatchers.Default) { repo.loadApps(ICON_PX) }
+            val cfg = settings.iconConfig
+            val list = withContext(Dispatchers.Default) { repo.loadApps(cfg, ICON_PX) }
             applyApps(list)
+            if (cfg != settings.iconConfig) rebakeIcons()
         }
     }
 
@@ -122,7 +133,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private fun buildInitialLayout(list: List<AppInfo>) {
         val dockPkgs = repo.defaultDockPackages()
         val newDock = dockPkgs.mapNotNull { pkg -> list.firstOrNull { it.packageName == pkg }?.key }
-            .distinct().take(DOCK_CAPACITY)
+            .distinct().take(dockCapacity)
 
         val used = newDock.toMutableSet()
         val ordered = mutableListOf<String>()
@@ -137,13 +148,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         // 3. Apps the user installed.
         list.filter { !it.isSystem }.forEach { add(it) }
 
-        val firstTwoPages = ordered.take(PAGE0_CAPACITY + PAGE_CAPACITY)
+        val firstTwoPages = ordered.take(capacity(0) + capacity(1))
         homePages = appendToPages(listOf(), firstTwoPages).ifEmpty { listOf(emptyList()) }
         dock = newDock
         persistLayout()
     }
-
-    private fun capacity(page: Int) = if (page == 0) PAGE0_CAPACITY else PAGE_CAPACITY
 
     private fun appendToPages(pages: List<List<String>>, keys: List<String>): List<List<String>> {
         val out = pages.map { it.toMutableList() }.toMutableList()
@@ -203,7 +212,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun addToDock(key: String): Boolean {
-        if (key in dock || dock.size >= DOCK_CAPACITY) return false
+        if (key in dock || dock.size >= dockCapacity) return false
         homePages = homePages.map { p -> p.filter { it != key } }
             .filterIndexed { i, p -> i == 0 || p.isNotEmpty() }
         dock = dock + key
@@ -267,10 +276,56 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun finishOnboarding() { onboarded = true; prefs.onboarded = true }
     fun replayOnboarding() { settingsOpen = false; onboarded = false; prefs.onboarded = false }
 
-    fun setWallpaperKind(k: WallpaperKind) { wallpaper = k; prefs.wallpaper = k }
-    fun setIconStyleValue(s: IconStyle) { iconStyle = s; prefs.iconStyle = s }
-    fun setAnimateWallpaperValue(v: Boolean) { animateWallpaper = v; prefs.animateWallpaper = v }
-    fun setShowLabelsValue(v: Boolean) { showLabels = v; prefs.showLabels = v }
+    /** Change any setting. Re-bakes icons or re-flows the grid only when needed. */
+    fun update(change: (LauncherSettings) -> LauncherSettings) {
+        val old = settings
+        val new = change(old)
+        if (new == old) return
+        settings = new
+        prefs.settings = new
+        com.bruce.liquidglass.ui.Motion.reduced = new.reducedMotion
+        com.bruce.liquidglass.ui.Haptics.enabled = new.haptics
+        if (new.iconConfig != old.iconConfig) rebakeIcons()
+        if (new.columns != old.columns || new.rows != old.rows || new.showWidget != old.showWidget) reflow()
+        if (new.dockSize < dock.size) {
+            val overflow = dock.drop(new.dockSize)
+            dock = dock.take(new.dockSize)
+            homePages = appendToPages(homePages, overflow)
+            persistLayout()
+        }
+    }
+
+    fun setWallpaperKind(k: WallpaperKind) = update { it.copy(wallpaper = k) }
+
+    private fun rebakeIcons() {
+        bakeJob?.cancel()
+        val cfg = settings.iconConfig
+        val current = apps
+        rebaking = true
+        bakeJob = viewModelScope.launch {
+            val baked = withContext(Dispatchers.Default) { repo.rebake(current, cfg, ICON_PX) }
+            apps = baked
+            appsByKey = baked.associateBy { it.key }
+            rebaking = false
+        }
+    }
+
+    /** Re-chunk the home screen after the grid size changes, keeping the order. */
+    private fun reflow() {
+        val all = homePages.flatten()
+        homePages = appendToPages(listOf(), all).ifEmpty { listOf(emptyList()) }
+        persistLayout()
+    }
+
+    fun hideApp(key: String) {
+        removeFromHome(key)
+        update { it.copy(hidden = it.hidden + key) }
+    }
+
+    fun unhideApp(key: String) {
+        update { it.copy(hidden = it.hidden - key) }
+        addToHome(key)
+    }
 
     fun setPhoto(uri: Uri) {
         viewModelScope.launch {
@@ -314,5 +369,5 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    companion object { const val ICON_PX = 168 }
+    companion object { const val ICON_PX = 192 }
 }

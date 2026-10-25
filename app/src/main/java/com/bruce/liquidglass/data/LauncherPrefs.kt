@@ -2,10 +2,7 @@ package com.bruce.liquidglass.data
 
 import android.content.Context
 
-enum class WallpaperKind { LIQUID, AURORA, NIGHT, PHOTO }
-enum class IconStyle { DEFAULT, CLEAR }
-
-/** Small wrapper around SharedPreferences. Everything is stored as plain strings. */
+/** Small wrapper around SharedPreferences. */
 class LauncherPrefs(context: Context) {
     private val sp = context.getSharedPreferences("liquid_glass", Context.MODE_PRIVATE)
 
@@ -13,23 +10,19 @@ class LauncherPrefs(context: Context) {
         get() = sp.getBoolean("onboarded", false)
         set(v) = sp.edit().putBoolean("onboarded", v).apply()
 
-    var wallpaper: WallpaperKind
-        get() = runCatching { WallpaperKind.valueOf(sp.getString("wallpaper", null) ?: "LIQUID") }
-            .getOrDefault(WallpaperKind.LIQUID)
-        set(v) = sp.edit().putString("wallpaper", v.name).apply()
-
-    var iconStyle: IconStyle
-        get() = runCatching { IconStyle.valueOf(sp.getString("icon_style", null) ?: "DEFAULT") }
-            .getOrDefault(IconStyle.DEFAULT)
-        set(v) = sp.edit().putString("icon_style", v.name).apply()
-
-    var animateWallpaper: Boolean
-        get() = sp.getBoolean("animate_wallpaper", true)
-        set(v) = sp.edit().putBoolean("animate_wallpaper", v).apply()
-
-    var showLabels: Boolean
-        get() = sp.getBoolean("show_labels", true)
-        set(v) = sp.edit().putBoolean("show_labels", v).apply()
+    var settings: LauncherSettings
+        get() {
+            val raw = sp.getString("settings", null)
+            if (raw != null) return LauncherSettings.fromJson(raw)
+            // migrate v1 keys
+            val old = LauncherSettings()
+            return old.copy(
+                wallpaper = runCatching { WallpaperKind.valueOf(sp.getString("wallpaper", "LIQUID")!!) }.getOrDefault(old.wallpaper),
+                animateWallpaper = sp.getBoolean("animate_wallpaper", true),
+                showLabels = sp.getBoolean("show_labels", true),
+            )
+        }
+        set(v) = sp.edit().putString("settings", v.toJson()).apply()
 
     /** Pages separated by '\n', items by '|'. Null = never set (first run). */
     var homePages: List<List<String>>?

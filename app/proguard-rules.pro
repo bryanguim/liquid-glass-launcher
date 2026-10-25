@@ -1,0 +1,2 @@
+-dontwarn org.jetbrains.annotations.**
+-keep class com.bruce.liquidglass.data.** { *; }

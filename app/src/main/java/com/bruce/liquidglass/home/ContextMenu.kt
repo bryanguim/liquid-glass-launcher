@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material.icons.rounded.SpaceDashboard
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,7 +45,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bruce.liquidglass.DOCK_CAPACITY
 import com.bruce.liquidglass.LauncherViewModel
 import com.bruce.liquidglass.MenuTarget
 import com.bruce.liquidglass.ui.Glass
@@ -79,7 +79,7 @@ fun ContextMenuOverlay(vm: LauncherViewModel) {
         })
         if (t.inDock) add(MenuItem("Retirer du dock", Icons.Rounded.RemoveCircleOutline) {
             vm.menu = null; vm.removeFromDock(t.app.key)
-        }) else if (vm.dock.size < DOCK_CAPACITY) add(MenuItem("Ajouter au dock", Icons.Rounded.SpaceDashboard) {
+        }) else if (vm.dock.size < vm.dockCapacity) add(MenuItem("Ajouter au dock", Icons.Rounded.SpaceDashboard) {
             vm.menu = null; vm.addToDock(t.app.key)
         })
         if (!t.onHome) add(MenuItem("Ajouter à l'écran d'accueil", Icons.Rounded.AddCircleOutline) {
@@ -89,6 +89,7 @@ fun ContextMenuOverlay(vm: LauncherViewModel) {
         if (t.onHome && !t.inDock) add(MenuItem("Retirer de l'écran d'accueil", Icons.Rounded.RemoveCircleOutline) {
             vm.menu = null; vm.removeFromHome(t.app.key)
         })
+        add(MenuItem("Masquer l'app", Icons.Rounded.VisibilityOff) { vm.menu = null; vm.hideApp(t.app.key) })
         add(MenuItem("Supprimer l'app", Icons.Rounded.DeleteOutline, destructive = true) {
             vm.menu = null; vm.uninstall(t.app)
         })
@@ -114,7 +115,7 @@ fun ContextMenuOverlay(vm: LauncherViewModel) {
                     shadowElevation = 18f * a
                 }
         ) {
-            IconImage(t.app, iconDp, vm.iconStyle)
+            IconImage(t.app, iconDp)
         }
 
         // Menu card, morphing out of the icon
