@@ -295,7 +295,7 @@ private val gestures = listOf(
     Gesture(Icons.Rounded.SwipeDown, "Glisse vers le bas", "Recherche instantanée dans tes apps et sur le Web."),
     Gesture(Icons.Rounded.SwipeLeft, "Va jusqu'à la dernière page", "La bibliothèque d'apps, rangée par catégories."),
     Gesture(Icons.Rounded.TouchApp, "Appui long sur une app", "Menu rapide : dock, infos, retirer, supprimer."),
-    Gesture(Icons.Rounded.Apps, "Appui long sur le fond", "Les icônes bougent : réorganise ton écran."),
+    Gesture(Icons.Rounded.Apps, "Appui long sur le fond", "Réorganise ton écran et ajoute des widgets."),
     Gesture(Icons.Rounded.Notifications, "Glisse depuis tout en haut", "Notifications à gauche, réglages rapides à droite."),
 )
 

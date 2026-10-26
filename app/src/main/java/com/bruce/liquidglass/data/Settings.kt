@@ -32,6 +32,7 @@ data class LauncherSettings(
     val clockStyle: ClockStyle = ClockStyle.THIN,
     val showBattery: Boolean = true,
     val searchPill: Boolean = true,
+    val widgetGlass: Boolean = true,
     // Dock
     val dockSize: Int = 4,
     val dockStyle: DockStyle = DockStyle.GLASS,
@@ -54,7 +55,7 @@ data class LauncherSettings(
         put("iconSheen", iconSheen); put("iconSize", iconSize); put("showLabels", showLabels)
         put("labelSize", labelSize.toDouble())
         put("columns", columns); put("rows", rows); put("showWidget", showWidget)
-        put("clockStyle", clockStyle.name); put("showBattery", showBattery); put("searchPill", searchPill)
+        put("clockStyle", clockStyle.name); put("showBattery", showBattery); put("searchPill", searchPill); put("widgetGlass", widgetGlass)
         put("dockSize", dockSize); put("dockStyle", dockStyle.name)
         put("glassTint", glassTint.toDouble()); put("glassRim", glassRim)
         put("haptics", haptics); put("returnAnimation", returnAnimation); put("reducedMotion", reducedMotion)
@@ -90,6 +91,7 @@ data class LauncherSettings(
                 clockStyle = o.enumOr("clockStyle", d.clockStyle),
                 showBattery = o.optBoolean("showBattery", d.showBattery),
                 searchPill = o.optBoolean("searchPill", d.searchPill),
+                widgetGlass = o.optBoolean("widgetGlass", d.widgetGlass),
                 dockSize = o.optInt("dockSize", d.dockSize),
                 dockStyle = o.enumOr("dockStyle", d.dockStyle),
                 glassTint = o.optDouble("glassTint", d.glassTint.toDouble()).toFloat(),

@@ -209,7 +209,7 @@ private fun RootPage(vm: LauncherViewModel, open: (Page) -> Unit) {
         Divider()
         NavRow(Icons.Rounded.AutoAwesome, Color(0xFFBF5AF2), "Icônes") { open(Page.ICONS) }
         Divider()
-        NavRow(Icons.Rounded.GridView, Color(0xFF30D158), "Écran d'accueil") { open(Page.HOME) }
+        NavRow(Icons.Rounded.GridView, Color(0xFF30D158), "Écran d'accueil et widgets") { open(Page.HOME) }
         Divider()
         NavRow(Icons.Rounded.Dashboard, Color(0xFFFF9F0A), "Dock") { open(Page.DOCK) }
         Divider()
@@ -231,7 +231,7 @@ private fun RootPage(vm: LauncherViewModel, open: (Page) -> Unit) {
         }
     }
     Text(
-        "Liquid Glass 2.0 — fait maison par Bruce",
+        "Liquid Glass 2.1 — fait maison par Bruce",
         color = Color.White.copy(alpha = 0.45f), fontSize = 12.sp,
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -347,6 +347,11 @@ private fun HomePageSettings(vm: LauncherViewModel) {
             Divider()
             ToggleRow("Batterie", s.showBattery) { v -> vm.update { it.copy(showBattery = v) } }
         }
+    }
+    Group("Widgets") {
+        NavRowPlain("Ajouter un widget") { vm.settingsOpen = false; vm.widgetPickerOpen = true }
+        Divider()
+        ToggleRow("Fond en verre derrière les widgets", s.widgetGlass) { v -> vm.update { it.copy(widgetGlass = v) } }
     }
     Group("Navigation") {
         ToggleRow("Bouton « Rechercher »", s.searchPill) { v -> vm.update { it.copy(searchPill = v) } }
@@ -589,6 +594,22 @@ private fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit
     ) {
         Text(label, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
         IosSwitch(value)
+    }
+}
+
+@Composable
+private fun NavRowPlain(label: String, onClick: () -> Unit) {
+    val view = LocalView.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .pointerInput(label) { detectTapGestures { view.tick(); onClick() } }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Color(0xFF0A84FF), fontSize = 16.sp, modifier = Modifier.weight(1f))
+        Icon(Icons.Rounded.ChevronRight, null, tint = Color.White.copy(alpha = 0.35f))
     }
 }
 

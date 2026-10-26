@@ -1,6 +1,8 @@
 package com.bruce.liquidglass
 
 import android.app.role.RoleManager
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
@@ -34,6 +36,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.lifecycle.Lifecycle
 import com.bruce.liquidglass.home.HomeScreen
+import com.bruce.liquidglass.home.LocalWidgetAdder
+import com.bruce.liquidglass.home.LocalWidgets
+import com.bruce.liquidglass.home.WidgetAdder
+import com.bruce.liquidglass.home.WidgetController
 import com.bruce.liquidglass.home.LauncherActions
 import com.bruce.liquidglass.home.LocalActions
 import com.bruce.liquidglass.onboarding.Onboarding
@@ -55,6 +61,11 @@ class MainActivity : ComponentActivity(), LauncherActions {
     private lateinit var photoPicker: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var roleRequest: ActivityResultLauncher<Intent>
     private var leftForApp = false
+    private lateinit var widgets: WidgetController
+    private lateinit var bindRequest: ActivityResultLauncher<Intent>
+    /** Widget being added: (id, info, rows) between bind → configure → placed. */
+    private var pending: Triple<Int, AppWidgetProviderInfo, Int>? = null
+    private var widgetsCleaned = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -70,13 +81,84 @@ class MainActivity : ComponentActivity(), LauncherActions {
             if (!isDefaultHome()) openHomeSettings()
         }
 
+        widgets = WidgetController(this)
+        vm.deleteWidgetId = { id -> widgets.delete(id) }
+        bindRequest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+            val p = pending ?: return@registerForActivityResult
+            if (res.resultCode == RESULT_OK) configureOrPlace(p) else cancelPending()
+        }
+
         applyRefreshRate(vm.settings.highRefresh)
         setContent {
             val high = vm.settings.highRefresh
             androidx.compose.runtime.LaunchedEffect(high) { applyRefreshRate(high) }
-            Root(vm, this)
+            CompositionLocalProvider(
+                LocalWidgets provides widgets,
+                LocalWidgetAdder provides WidgetAdder { info, rows -> addWidget(info, rows) },
+            ) {
+                Root(vm, this)
+            }
+            LaunchedEffect(vm.loaded) {
+                if (vm.loaded && !widgetsCleaned && pending == null) {
+                    widgetsCleaned = true
+                    widgets.cleanup(vm.placedWidgetIds())
+                }
+            }
         }
     }
+
+    // ---------------- widgets ----------------
+
+    private fun addWidget(info: AppWidgetProviderInfo, rows: Int) {
+        val id = runCatching { widgets.allocate() }.getOrNull() ?: return
+        val p = Triple(id, info, rows)
+        pending = p
+        val bound = runCatching {
+            widgets.manager.bindAppWidgetIdIfAllowed(id, info.profile, info.provider, null)
+        }.getOrDefault(false)
+        if (bound) {
+            configureOrPlace(p)
+        } else {
+            val i = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, info.profile)
+            runCatching { bindRequest.launch(i) }.onFailure { cancelPending() }
+        }
+    }
+
+    private fun configureOrPlace(p: Triple<Int, AppWidgetProviderInfo, Int>) {
+        val (id, info, _) = p
+        val optional = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            (info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL) != 0
+        if (info.configure != null && !optional) {
+            if (!widgets.startConfigure(this, id, REQUEST_CONFIGURE)) place(p)
+        } else {
+            place(p)
+        }
+    }
+
+    private fun place(p: Triple<Int, AppWidgetProviderInfo, Int>) {
+        pending = null
+        vm.addWidget(p.first, p.third)
+    }
+
+    private fun cancelPending() {
+        pending?.let { widgets.delete(it.first) }
+        pending = null
+    }
+
+    @Deprecated("Needed for AppWidgetHost configure activities")
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CONFIGURE) {
+            val p = pending ?: return
+            if (resultCode == RESULT_OK) place(p) else cancelPending()
+        }
+    }
+
+    companion object { private const val REQUEST_CONFIGURE = 4242 }
 
     /** Ask for the panel's fastest mode (120 Hz on Honor) — MagicOS often keeps apps at 60 Hz otherwise. */
     private fun applyRefreshRate(high: Boolean) {
@@ -102,11 +184,13 @@ class MainActivity : ComponentActivity(), LauncherActions {
 
     override fun onStop() {
         super.onStop()
+        widgets.stop()
         leftForApp = true
     }
 
     override fun onStart() {
         super.onStart()
+        widgets.start()
         if (leftForApp) {
             leftForApp = false
             vm.menu = null

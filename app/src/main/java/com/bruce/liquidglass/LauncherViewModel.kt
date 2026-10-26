@@ -18,7 +18,10 @@ import androidx.lifecycle.viewModelScope
 import com.bruce.liquidglass.data.AppInfo
 import com.bruce.liquidglass.data.AppRepository
 import com.bruce.liquidglass.data.Categories
+import com.bruce.liquidglass.data.GridSpec
+import com.bruce.liquidglass.data.HomeLayout
 import com.bruce.liquidglass.data.LauncherPrefs
+import com.bruce.liquidglass.data.WidgetKey
 import com.bruce.liquidglass.data.LauncherSettings
 import com.bruce.liquidglass.data.WallpaperKind
 import com.bruce.liquidglass.data.iconConfig
@@ -32,6 +35,8 @@ import java.io.FileOutputStream
 
 
 enum class SearchMode { SPOTLIGHT, LIBRARY }
+
+data class WidgetMenuTarget(val key: String, val bounds: Rect)
 
 data class MenuTarget(
     val app: AppInfo,
@@ -65,10 +70,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val visibleApps: List<AppInfo> get() = apps.filter { it.key !in settings.hidden }
 
     val dockCapacity: Int get() = settings.dockSize
-    fun capacity(page: Int): Int {
-        val perPage = settings.columns * settings.rows
-        return if (page == 0 && settings.showWidget) settings.columns * (settings.rows - 2) else perPage
-    }
+    val grid: GridSpec get() = GridSpec(settings.columns, settings.rows, settings.showWidget)
+    fun capacity(page: Int): Int = settings.columns * grid.rowsFor(page)
+
+    // ---- widgets ----
+    var widgetPickerOpen by mutableStateOf(false)
+    var widgetMenu by mutableStateOf<WidgetMenuTarget?>(null)
+    /** Set by the activity: frees a widget id in the AppWidgetHost. */
+    var deleteWidgetId: (Int) -> Unit = {}
+    /** Page the user was looking at when the picker opened — new widgets go there. */
+    var currentPage by mutableStateOf(0)
 
     // ---- transient UI state ----
     var editing by mutableStateOf(false)
@@ -115,7 +126,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             buildInitialLayout(list)
         } else {
             val known = prefs.knownApps
-            var pages = storedPages.map { p -> p.filter { it in byKey } }.filter { it.isNotEmpty() }
+            var pages = storedPages.map { p -> p.filter { WidgetKey.isWidget(it) || it in byKey } }.filter { it.isNotEmpty() }
             val newDock = storedDock.filter { it in byKey }
             val placed = pages.flatten().toSet() + newDock
             // Like iOS: newly installed apps land at the end of the home screen.
@@ -154,16 +165,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persistLayout()
     }
 
-    private fun appendToPages(pages: List<List<String>>, keys: List<String>): List<List<String>> {
-        val out = pages.map { it.toMutableList() }.toMutableList()
-        if (out.isEmpty()) out += mutableListOf<String>()
-        for (k in keys) {
-            var last = out.lastIndex
-            if (out[last].size >= capacity(last)) { out += mutableListOf<String>(); last++ }
-            out[last] += k
-        }
-        return out
-    }
+    private fun appendToPages(pages: List<List<String>>, keys: List<String>): List<List<String>> =
+        HomeLayout.append(pages, keys, grid)
 
     private fun persistLayout() {
         prefs.homePages = homePages.filter { it.isNotEmpty() }.ifEmpty { listOf(emptyList()) }
@@ -212,6 +215,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun addToDock(key: String): Boolean {
+        if (WidgetKey.isWidget(key)) return false
         if (key in dock || dock.size >= dockCapacity) return false
         homePages = homePages.map { p -> p.filter { it != key } }
             .filterIndexed { i, p -> i == 0 || p.isNotEmpty() }
@@ -238,10 +242,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun swap(a: String, b: String) {
+        // Widgets never go into the dock.
+        if ((WidgetKey.isWidget(a) && b in dock) || (WidgetKey.isWidget(b) && a in dock)) return
         fun swapIn(list: List<String>): List<String> = list.map {
             when (it) { a -> b; b -> a; else -> it }
         }
-        homePages = homePages.map { swapIn(it) }
+        homePages = HomeLayout.normalize(homePages.map { swapIn(it) }, grid)
         dock = swapIn(dock)
         persistLayout()
     }
@@ -252,7 +258,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val pages = homePages.map { p -> p.filter { it != key }.toMutableList() }.toMutableList()
         val wasInDock = key in dock
         while (pages.size <= pageIndex) pages += mutableListOf<String>()
-        if (pages[pageIndex].size >= capacity(pageIndex)) return
+        if (!HomeLayout.fits(pages[pageIndex] + key, pageIndex, grid)) return
         pages[pageIndex] += key
         homePages = pages.filterIndexed { i, p -> i == 0 || p.isNotEmpty() }
         if (wasInDock) dock = dock.filter { it != key }
@@ -265,7 +271,41 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (addToDock(key)) selectedForMove = null
     }
 
+    // ---------------- widgets ----------------
+
+    /** Adds a freshly bound widget to the page the user was on (or the next page with room). */
+    fun addWidget(id: Int, rows: Int) {
+        val key = WidgetKey.make(id, rows.coerceAtMost(grid.rows - 1))
+        val pages = homePages.map { it.toMutableList() }.toMutableList()
+        if (pages.isEmpty()) pages += mutableListOf<String>()
+        var target = currentPage.coerceIn(0, pages.lastIndex)
+        while (target < pages.size && !HomeLayout.fits(pages[target] + key, target, grid)) target++
+        if (target >= pages.size) pages += mutableListOf(key) else pages[target] += key
+        homePages = HomeLayout.normalize(pages, grid)
+        persistLayout()
+    }
+
+    fun removeWidget(key: String) {
+        removeFromHome(key)
+        homePages = HomeLayout.normalize(homePages, grid)
+        persistLayout()
+        deleteWidgetId(WidgetKey.id(key))
+    }
+
+    fun resizeWidget(key: String, rows: Int) {
+        val newKey = WidgetKey.withRows(key, rows.coerceAtMost(grid.rows - 1))
+        if (newKey == key) return
+        homePages = HomeLayout.normalize(homePages.map { p -> p.map { if (it == key) newKey else it } }, grid)
+        if (selectedForMove == key) selectedForMove = newKey
+        widgetMenu = widgetMenu?.let { if (it.key == key) it.copy(key = newKey) else it }
+        persistLayout()
+    }
+
+    /** Ids of every widget placed on the home screen (to clean up orphans). */
+    fun placedWidgetIds(): Set<Int> = homePages.flatten().filter { WidgetKey.isWidget(it) }.map { WidgetKey.id(it) }.toSet()
+
     fun resetLayout() {
+        homePages.flatten().filter { WidgetKey.isWidget(it) }.forEach { deleteWidgetId(WidgetKey.id(it)) }
         prefs.homePages = null
         prefs.dock = null
         buildInitialLayout(apps)
@@ -312,7 +352,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Re-chunk the home screen after the grid size changes, keeping the order. */
     private fun reflow() {
-        val all = homePages.flatten()
+        val cap = grid.rows - 1
+        val all = homePages.flatten().map { if (WidgetKey.isWidget(it) && WidgetKey.rows(it) > cap) WidgetKey.withRows(it, cap) else it }
         homePages = appendToPages(listOf(), all).ifEmpty { listOf(emptyList()) }
         persistLayout()
     }
@@ -361,6 +402,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun closeOverlays(): Boolean {
         return when {
             menu != null -> { menu = null; true }
+            widgetMenu != null -> { widgetMenu = null; true }
+            widgetPickerOpen -> { widgetPickerOpen = false; true }
             openCategory != null -> { openCategory = null; true }
             search != null -> { search = null; true }
             settingsOpen -> { settingsOpen = false; true }

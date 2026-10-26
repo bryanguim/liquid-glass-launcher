@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,6 +38,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
@@ -44,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +65,8 @@ import com.bruce.liquidglass.MenuTarget
 import com.bruce.liquidglass.SearchMode
 import com.bruce.liquidglass.data.DockStyle
 import com.bruce.liquidglass.data.SwipeDownAction
+import com.bruce.liquidglass.data.HomeLayout
+import com.bruce.liquidglass.data.WidgetKey
 import com.bruce.liquidglass.ui.CoordsRef
 import com.bruce.liquidglass.ui.Glass
 import com.bruce.liquidglass.ui.LocalBackdrop
@@ -103,7 +108,9 @@ fun HomeScreen(vm: LauncherViewModel) {
         }
     }
 
-    val overlayOpen = vm.menu != null || vm.search != null || vm.openCategory != null || vm.settingsOpen
+    LaunchedEffect(pagerState.currentPage) { vm.currentPage = pagerState.currentPage.coerceAtMost(homeCount - 1).coerceAtLeast(0) }
+
+    val overlayOpen = vm.widgetMenu != null || vm.widgetPickerOpen || vm.menu != null || vm.search != null || vm.openCategory != null || vm.settingsOpen
     val overlay by animateFloatAsState(if (overlayOpen) 1f else 0f, Motion.soft(), label = "overlay")
 
     Box(Modifier.fillMaxSize()) {
@@ -159,6 +166,8 @@ fun HomeScreen(vm: LauncherViewModel) {
 
         // ---- overlays ----
         ContextMenuOverlay(vm)
+        WidgetMenuOverlay(vm)
+        WidgetPicker(vm)
         CategoryOverlay(vm)
         SearchOverlay(vm)
         SettingsSheet(vm)
@@ -188,19 +197,30 @@ private fun EditBar(vm: LauncherViewModel) {
         enter = fadeIn(tween(220)) + slideInVertically(Motion.snappy()) { -it },
         exit = fadeOut(tween(160)) + slideOutVertically(Motion.snappy()) { -it },
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlassButton(text = "Réglages", icon = { Icon(Icons.Rounded.Tune, null, tint = Color.White, modifier = Modifier.size(16.dp)) }) {
-                view.tick(); vm.settingsOpen = true
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GlassButton(text = "Widgets", icon = { Icon(Icons.Rounded.Add, null, tint = Color.White, modifier = Modifier.size(18.dp)) }) {
+                    view.tick(); vm.widgetPickerOpen = true
+                }
+                GlassButton(text = "Réglages", icon = { Icon(Icons.Rounded.Tune, null, tint = Color.White, modifier = Modifier.size(16.dp)) }) {
+                    view.tick(); vm.settingsOpen = true
+                }
+                Spacer(Modifier.weight(1f))
+                GlassButton(text = "OK", bold = true) {
+                    view.tick(); vm.editing = false; vm.selectedForMove = null
+                }
             }
-            val hint = if (vm.selectedForMove != null) "Touche une app ou un vide" else "Touche 2 apps pour échanger"
-            Text(hint, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-            GlassButton(text = "OK", bold = true) {
-                view.tick(); vm.editing = false; vm.selectedForMove = null
-            }
+            val hint = if (vm.selectedForMove != null) "Touche un élément pour échanger, ou un vide pour déplacer"
+            else "Touche 2 éléments pour les échanger"
+            Text(
+                hint, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }
@@ -238,80 +258,101 @@ private fun HomePage(vm: LauncherViewModel, page: Int, keys: List<String>, appea
     val s = vm.settings
     val cols = s.columns
     val rows = s.rows
-    BoxWithConstraints(
-        Modifier
-            .fillMaxSize()
-            .pointerInput(page) {
-                detectTapGestures(
-                    onTap = {
-                        if (vm.editing) {
-                            if (vm.selectedForMove != null) { view.tick(); vm.moveSelectedToPage(page) }
-                            else { vm.editing = false }
-                        }
-                    },
-                    onLongPress = {
-                        if (!vm.editing) { view.thud(); vm.editing = true }
-                    },
-                )
-            }
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-    ) {
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
         val rowH = maxHeight / rows
+        val cellW = maxWidth / cols
         val totalRows = rows.toFloat()
-        val iconSize = minOf(s.iconSize.dp, maxWidth / cols - 14.dp)
-        Column(Modifier.fillMaxSize()) {
-            val widget = page == 0 && s.showWidget
-            if (widget) {
-                ClockWidget(
-                    s,
-                    Modifier
-                        .fillMaxWidth()
-                        .height(rowH * 2 - 14.dp)
-                        .padding(horizontal = 8.dp)
-                        .appearIn(appear, 0f)
-                )
-                Spacer(Modifier.height(14.dp))
-            }
-            val firstRow = if (widget) 2 else 0
-            keys.chunked(cols).forEachIndexed { r, rowKeys ->
-                Row(Modifier.fillMaxWidth().height(rowH)) {
-                    for (c in 0 until cols) {
-                        Box(Modifier.weight(1f).padding(top = 6.dp), contentAlignment = Alignment.TopCenter) {
-                            val key = rowKeys.getOrNull(c)
-                            val app = key?.let { vm.appsByKey[it] }
-                            if (app != null) {
-                                // ripple-like delay: farther from the center = later
-                                val half = (cols - 1) / 2f
-                                val dx = (c - half) / half
-                                val dy = ((firstRow + r) - (totalRows - 1) / 2f) / ((totalRows - 1) / 2f)
-                                val d = (hypot(dx, dy) / 1.42f).coerceIn(0f, 1f) * 0.35f
-                                AppIcon(
-                                    app = app,
-                                    iconSize = iconSize,
-                                    showLabel = s.showLabels,
-                                    editing = vm.editing,
-                                    selected = vm.selectedForMove == app.key,
-                                    seed = abs(app.key.hashCode()),
-                                    onTap = { b -> if (vm.editing) vm.onEditTap(app.key) else vm.launch(app, b, view) },
-                                    onLongPress = { b ->
-                                        if (vm.editing) vm.onEditTap(app.key)
-                                        else vm.menu = MenuTarget(app, b, inDock = false, onHome = true)
-                                    },
-                                    onRemove = { vm.removeFromHome(app.key) },
-                                    modifier = Modifier.appearIn(appear, d),
-                                )
+        val iconSize = minOf(s.iconSize.dp, cellW - 14.dp)
+        val clock = page == 0 && s.showWidget
+        val firstRow = if (clock) 2 else 0
+
+        // Background: taps / long-press on empty space. A sibling (not a parent) so widgets keep their own touches.
+        Box(
+            Modifier
+                .matchParentSize()
+                .pointerInput(page) {
+                    detectTapGestures(
+                        onTap = {
+                            if (vm.editing) {
+                                if (vm.selectedForMove != null) { view.tick(); vm.moveSelectedToPage(page) }
+                                else { vm.editing = false }
                             }
+                        },
+                        onLongPress = {
+                            if (!vm.editing) { view.thud(); vm.editing = true }
+                        },
+                    )
+                }
+        )
+
+        if (clock) {
+            ClockWidget(
+                s,
+                Modifier
+                    .fillMaxWidth()
+                    .height(rowH * 2 - 14.dp)
+                    .padding(horizontal = 8.dp)
+                    .appearIn(appear, 0f)
+            )
+        }
+
+        val placements = remember(keys, cols) { HomeLayout.place(keys, cols).first }
+        placements.forEach { pl ->
+            key(pl.key) {
+                val y = rowH * (firstRow + pl.row)
+                val half = (cols - 1) / 2f
+                val dx = if (half > 0f) (pl.col - half) / half else 0f
+                val dy = ((firstRow + pl.row) - (totalRows - 1) / 2f) / ((totalRows - 1) / 2f)
+                val d = (hypot(dx, dy) / 1.42f).coerceIn(0f, 1f) * 0.35f
+                if (WidgetKey.isWidget(pl.key)) {
+                    HomeWidget(
+                        vm = vm,
+                        key = pl.key,
+                        modifier = Modifier
+                            .offset(x = 0.dp, y = y)
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                            .fillMaxWidth()
+                            .height(rowH * pl.spanRows - 10.dp)
+                            .appearIn(appear, d),
+                    )
+                } else {
+                    val app = vm.appsByKey[pl.key]
+                    if (app != null) {
+                        Box(
+                            Modifier
+                                .offset(x = cellW * pl.col, y = y)
+                                .width(cellW)
+                                .height(rowH)
+                                .padding(top = 6.dp),
+                            contentAlignment = Alignment.TopCenter,
+                        ) {
+                            AppIcon(
+                                app = app,
+                                iconSize = iconSize,
+                                showLabel = s.showLabels,
+                                editing = vm.editing,
+                                selected = vm.selectedForMove == app.key,
+                                seed = abs(app.key.hashCode()),
+                                onTap = { b -> if (vm.editing) vm.onEditTap(app.key) else vm.launch(app, b, view) },
+                                onLongPress = { b ->
+                                    if (vm.editing) vm.onEditTap(app.key)
+                                    else vm.menu = MenuTarget(app, b, inDock = false, onHome = true)
+                                },
+                                onRemove = { vm.removeFromHome(app.key) },
+                                modifier = Modifier.appearIn(appear, d),
+                            )
                         }
                     }
                 }
             }
-            if (keys.isEmpty() && page != 0) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (vm.selectedForMove != null) "Touche ici pour déplacer l'app sur cette page" else "Nouvelle page",
-                        color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp,
-                    )
-                }
+        }
+
+        if (keys.isEmpty() && page != 0) {
+            Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    if (vm.selectedForMove != null) "Touche ici pour déplacer l'élément sur cette page" else "Nouvelle page",
+                    color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp,
+                )
             }
         }
     }
